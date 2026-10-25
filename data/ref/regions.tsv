@@ -1,0 +1,4 @@
+contig	real_chromosome	real_start	real_end	length	focus_gene	assembly
+ALB_region	6	88284931	88703331	418401	ALB	ARS-UCD2.0
+DGAT1_region	14	403035	812781	409747	DGAT1	ARS-UCD2.0
+UMOD_region	25	17809950	18228531	418582	UMOD	ARS-UCD2.0

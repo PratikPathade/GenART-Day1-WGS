@@ -1,0 +1,4 @@
+sample	role	animal	name_in_published_vcf	ena_run	whole_genome_depth
+dna_A	calf	Damona-GIGA-ULiège-18	Damona-GIGA-ULiege-18	ERR11839901	6.1
+dna_B	parent	Damona-GIGA-ULiège-14	Damona-GIGA-ULiege-14	ERR11839564	6.2
+dna_C	parent	Damona-GIGA-ULiège-17	Damona-GIGA-ULiege-17	ERR11839588	5.8
