@@ -60,6 +60,7 @@ printf '%s' "$C"; cat <<'EOF'
 EOF
 printf '%s\n' "$N"; set -x
 
+rm -rf data repo
 if [ -d "$HERE/data" ]; then
   cp -r "$HERE/data" data
 else
