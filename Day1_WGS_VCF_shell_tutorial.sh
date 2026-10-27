@@ -5,6 +5,7 @@
 #
 # Plain shell: every command is printed in green with a "$" and then run; all output is shown. Explanations are in cyan.
 # Runs on Linux (Colab terminal, or in a Colab cell:  !bash Day1_WGS_VCF_shell_tutorial.sh ). Needs internet for the first run.
+# Figures (matplotlib) are saved as PNG files in results/wgs/figures/
 # Everything is made in ./Day1_WGS (change with  WORK=/some/folder ). The tools are installed to ~/genart-lab (change with LAB=...).
 # If a data/ folder sits next to this script (the cloned repository), it is used; otherwise the repository is cloned from GitHub.
 
@@ -81,7 +82,8 @@ printf '%s\n' "$N"; set -x
 }
 micromamba --version
 
-[ -x "$LAB/env/bin/bcftools" ] || micromamba create -y -p $LAB/env -c conda-forge -c bioconda python=3.11 fastqc=0.13.0 multiqc=1.35 fastp=1.4.0 bwa=0.7.19 samtools=1.24 bcftools=1.24
+[ -x "$LAB/env/bin/bcftools" ] || micromamba create -y -p $LAB/env -c conda-forge -c bioconda python=3.11 numpy matplotlib-base fastqc=0.13.0 multiqc=1.35 fastp=1.4.0 bwa=0.7.19 samtools=1.24 bcftools=1.24
+"$LAB/env/bin/python" -c 'import matplotlib' 2>/dev/null || micromamba install -y -p "$LAB/env" -c conda-forge numpy matplotlib-base
 
 { set +x; } 2>/dev/null
 printf '\n%s=====================================================================%s\n' "$B" "$N"
@@ -264,6 +266,50 @@ fastqc -t 2 --extract --outdir results/wgs/qc_clean results/wgs/trim/dna_C_R1.fa
 
 cat results/wgs/qc_clean/dna_A_R1_fastqc/summary.txt
 
+MPLBACKEND=Agg python - <<'PY'
+import os
+import numpy as np
+import matplotlib.pyplot as plt
+os.makedirs("results/wgs/figures", exist_ok=True)
+
+def fastqc_module(path, name):
+    """the rows of one FastQC module (FastQC writes them as a text table)"""
+    rows, on = [], False
+    for line in open(path):
+        if line.startswith(">>" + name):
+            on = True
+        elif on and line.startswith(">>END_MODULE"):
+            break
+        elif on and not line.startswith("#"):
+            rows.append(line.rstrip("\n").split("\t"))
+    return rows
+
+fig, ax = plt.subplots(1, 2, figsize=(11, 3.8))
+for label, folder, col in [("raw reads", "qc_raw", "tab:red"), ("trimmed reads", "qc_clean", "tab:blue")]:
+    path = f"results/wgs/{folder}/dna_A_R1_fastqc/fastqc_data.txt"
+    q = fastqc_module(path, "Per base sequence quality")
+    n = fastqc_module(path, "Per base N content")
+    ax[0].plot([float(r[0].split("-")[0]) for r in q], [float(r[1]) for r in q], color=col, label=label)
+    ax[1].plot([float(r[0].split("-")[0]) for r in n], [float(r[1]) for r in n], color=col, label=label)
+ax[0].axhline(30, ls="--", c="grey", lw=1)
+ax[0].text(2, 30.5, "Q30 = 1 error in 1,000 bases", fontsize=8, color="grey")
+ax[0].set(title="Mean base quality along the read (dna_A, R1)", xlabel="position in read", ylabel="Phred quality")
+ax[1].set(title="Share of N bases along the read", xlabel="position in read", ylabel="% of reads with N")
+ax[0].legend(loc="lower left"); ax[1].legend()
+plt.tight_layout()
+plt.savefig("results/wgs/figures/A1_read_quality.png", dpi=120, bbox_inches="tight")
+PY
+
+{ set +x; } 2>/dev/null
+printf '\n%s=====================================================================%s\n' "$B" "$N"
+printf '%s' "$C"; cat <<'EOF'
+Figure: base quality and N bases, raw reads against trimmed reads (dna_A, R1).
+Left: the quality falls towards the end of the read (normal for Illumina); after trimming the whole curve lies higher because the poor tails are gone.
+Right: the raw reads have about 22 % N at the very last position, the trimmed reads none. This is the "Per base N content" problem that FastQC flagged, and the reason for trimming.
+EOF
+printf '%s\n' "$N"; set -x
+
+
 { set +x; } 2>/dev/null
 printf '\n%s=====================================================================%s\n' "$B" "$N"
 printf '%s' "$C"; cat <<'EOF'
@@ -355,6 +401,52 @@ samtools coverage results/wgs/dna/dna_A.bam | cut -f1,4,6,7
 samtools coverage results/wgs/dna/dna_B.bam | cut -f1,4,6,7
 samtools coverage results/wgs/dna/dna_C.bam | cut -f1,4,6,7
 
+for s in dna_A dna_B dna_C; do samtools depth -a results/wgs/dna/$s.bam | awk -v s=$s -v OFS='\t' '{b=int(($2-1)/5000); k=$1 "\t" b; sum[k]+=$3; n[k]++} END {for (k in sum) {split(k,a,"\t"); print s, a[1], a[2]*5000, sum[k]/n[k]}}'; done | sort -k1,1 -k2,2 -k3,3n > results/wgs/dna/depth_5kb.tsv
+for s in dna_A dna_B dna_C; do samtools stats results/wgs/dna/$s.bam | grep '^IS' | cut -f2,3 | sed "s/^/$s\t/"; done > results/wgs/dna/insert_sizes.tsv
+head -n 3 results/wgs/dna/depth_5kb.tsv
+head -n 3 results/wgs/dna/insert_sizes.tsv
+
+MPLBACKEND=Agg python - <<'PY'
+import os
+import numpy as np
+import matplotlib.pyplot as plt
+os.makedirs("results/wgs/figures", exist_ok=True)
+import csv, collections
+depth = collections.defaultdict(lambda: collections.defaultdict(list))
+for s, contig, pos, d in csv.reader(open("results/wgs/dna/depth_5kb.tsv"), delimiter="\t"):
+    depth[contig][s].append((int(pos) / 1000, float(d)))
+colors = {"dna_A": "tab:red", "dna_B": "tab:blue", "dna_C": "tab:green"}
+fig, ax = plt.subplots(2, 2, figsize=(11, 6.5))
+for a, contig in zip(ax.flat, sorted(depth)):
+    for s in colors:
+        xs, ys = zip(*sorted(depth[contig][s]))
+        a.plot(xs, ys, color=colors[s], lw=1, label=s)
+    a.set(title=contig, xlabel="position on the contig (kb)", ylabel="mean depth per 5 kb")
+ax[0, 0].legend()
+a = ax[1, 1]
+ins = collections.defaultdict(dict)
+for s, size, n in csv.reader(open("results/wgs/dna/insert_sizes.tsv"), delimiter="\t"):
+    ins[s][int(size)] = int(n)
+for s in colors:
+    tot = sum(ins[s].values())
+    bins = np.arange(0, 1001, 10)                      # 10-base bins make the curve smooth
+    counts = [sum(v for k, v in ins[s].items() if lo <= k < lo + 10) for lo in bins[:-1]]
+    a.plot(bins[:-1] + 5, [100 * c / tot for c in counts], color=colors[s], lw=1.3, label=s)
+a.set(title="Insert size (distance between the two reads of a pair)", xlabel="bases", ylabel="% of read pairs per 10 bases", xlim=(0, 1000))
+plt.tight_layout()
+plt.savefig("results/wgs/figures/B1_coverage_and_insert_size.png", dpi=120, bbox_inches="tight")
+PY
+
+{ set +x; } 2>/dev/null
+printf '\n%s=====================================================================%s\n' "$B" "$N"
+printf '%s' "$C"; cat <<'EOF'
+Figure: depth along the three reference windows and the insert size.
+Depth is about 3-5x along the windows, with gaps where it falls to 0: repeat sequence, whose reads were left out when the data were cut. All three animals follow the same ups and downs, because depth depends on the genome (repeats, GC) more than on the animal.
+Bottom right: the insert size (distance between the two reads of a pair) peaks at about 550-600 bases, as expected for this library.
+EOF
+printf '%s\n' "$N"; set -x
+
+
 { set +x; } 2>/dev/null
 printf '\n%s=====================================================================%s\n' "$B" "$N"
 printf '%s' "$C"; cat <<'EOF'
@@ -396,6 +488,41 @@ printf '%s\n' "$N"; set -x
 bcftools view -i 'QUAL>=30 && MIN(FMT/DP)>=4' -Oz -o results/wgs/dna/calls.filtered.vcf.gz results/wgs/dna/calls.vcf.gz
 bcftools index -f results/wgs/dna/calls.filtered.vcf.gz
 bcftools view -H results/wgs/dna/calls.filtered.vcf.gz | wc -l
+
+bcftools query -f '%CHROM\t%POS\t%QUAL\t%INFO/DP[\t%DP]\n' results/wgs/dna/calls.vcf.gz > results/wgs/dna/calls_table.tsv
+head -n 3 results/wgs/dna/calls_table.tsv
+wc -l results/wgs/dna/calls_table.tsv
+
+MPLBACKEND=Agg python - <<'PY'
+import os
+import numpy as np
+import matplotlib.pyplot as plt
+os.makedirs("results/wgs/figures", exist_ok=True)
+rows = [l.rstrip("\n").split("\t") for l in open("results/wgs/dna/calls_table.tsv")]
+qual = np.array([float(r[2]) for r in rows])
+mindp = np.array([min(float(x) if x != "." else 0 for x in r[4:7]) for r in rows])
+keep = (qual >= 30) & (mindp >= 4)
+fig, ax = plt.subplots(1, 3, figsize=(13, 3.8))
+ax[0].hist(np.clip(qual, 0, 225), bins=45, color="tab:grey")
+ax[0].axvline(30, color="tab:red", ls="--"); ax[0].set(title="Call quality (QUAL)", xlabel="QUAL (values above 225 shown at 225)", ylabel="variants")
+ax[1].hist(np.clip(mindp, 0, 20), bins=np.arange(-0.5, 21.5, 1), color="tab:grey")
+ax[1].axvline(3.5, color="tab:red", ls="--"); ax[1].set(title="Fewest reads in any animal (MIN DP)", xlabel="reads (values above 20 shown at 20)", ylabel="variants")
+ax[2].scatter(np.clip(mindp, 0, 20) + np.random.default_rng(1).uniform(-0.3, 0.3, len(qual)), np.clip(qual, 0, 225), c=np.where(keep, "tab:green", "tab:red"), s=6, alpha=0.5)
+ax[2].axvline(3.5, color="grey", ls="--", lw=1); ax[2].axhline(30, color="grey", ls="--", lw=1)
+ax[2].set(title=f"Kept (green) {keep.sum()} of {len(keep)}", xlabel="MIN DP", ylabel="QUAL")
+plt.tight_layout()
+plt.savefig("results/wgs/figures/B2_call_quality_and_filter.png", dpi=120, bbox_inches="tight")
+PY
+
+{ set +x; } 2>/dev/null
+printf '\n%s=====================================================================%s\n' "$B" "$N"
+printf '%s' "$C"; cat <<'EOF'
+Figure: quality of the variant calls and what the filter keeps.
+Left: many calls have a low QUAL; the pile at the right are the sure calls (QUAL above 225). Middle: for most variants at least one animal has only 0-3 reads: with three animals at about 3x we cannot trust those calls.
+Right: every dot is a variant. Green = kept by the filter (QUAL >= 30 and at least 4 reads in every animal), red = removed. Both thresholds matter.
+EOF
+printf '%s\n' "$N"; set -x
+
 
 { set +x; } 2>/dev/null
 printf '\n%s=====================================================================%s\n' "$B" "$N"
@@ -506,13 +633,44 @@ EOF
 printf '%s\n' "$N"; set -x
 
 { set +x; } 2>/dev/null     # no command echo inside this loop, so that the table stays readable
+: > results/wgs/dna/filters.tsv
 printf '%-34s %7s %7s   %s\n' "filter" "calls" "Ts/Tv" "Mendel errors"
 for f in "QUAL>=0" "QUAL>=30" "QUAL>=30 && INFO/DP>=10" "QUAL>=30 && MIN(FMT/DP)>=4" "QUAL>=30 && MIN(FMT/DP)>=6"; do
   calls=$(bcftools view -H -i "$f" results/wgs/dna/calls.vcf.gz 2>/dev/null | wc -l)
   tstv=$(bcftools stats -i "$f" results/wgs/dna/calls.vcf.gz 2>/dev/null | grep '^TSTV' | cut -f5)
   mend=$(bcftools +mendelian2 results/wgs/dna/calls.vcf.gz -i "$f" -p dna_A,dna_B,dna_C 2>/dev/null | awk '/^ngood\t/ {g=$2} /^nmerr\t/ {e=$2} END {printf "%d of %d", e, g+e}')
   printf '%-34s %7s %7s   %s\n' "$f" "$calls" "$tstv" "$mend"
+  printf '%s\t%s\t%s\t%s\n' "$f" "$calls" "$tstv" "$mend" >> results/wgs/dna/filters.tsv
 done
+
+MPLBACKEND=Agg python - <<'PY'
+import os
+import numpy as np
+import matplotlib.pyplot as plt
+os.makedirs("results/wgs/figures", exist_ok=True)
+rows = [l.rstrip("\n").split("\t") for l in open("results/wgs/dna/filters.tsv")]
+names = [r[0].replace(" && ", "\n& ") for r in rows]
+calls = [int(r[1]) for r in rows]
+err = [100 * int(r[3].split()[0]) / int(r[3].split()[2]) for r in rows]
+fig, ax = plt.subplots(figsize=(10, 4.2))
+ax.bar(range(len(rows)), calls, color="tab:grey")
+ax.set_xticks(range(len(rows))); ax.set_xticklabels(names, fontsize=8)
+ax.set(ylabel="variants kept", title="Stricter filter: fewer variants, fewer Mendelian errors")
+ax2 = ax.twinx()
+ax2.plot(range(len(rows)), err, "o-", color="tab:red")
+ax2.set_ylabel("Mendelian errors (% of checked genotypes)", color="tab:red")
+plt.tight_layout()
+plt.savefig("results/wgs/figures/B3_filter_tradeoff.png", dpi=120, bbox_inches="tight")
+PY
+
+{ set +x; } 2>/dev/null
+printf '\n%s=====================================================================%s\n' "$B" "$N"
+printf '%s' "$C"; cat <<'EOF'
+Figure: the price of a stricter filter.
+Bars: variants kept. Red line: Mendelian errors in the calf-and-parents check. Each stricter filter removes more variants and more errors: from about 20 % wrong genotypes without a filter to about 3 % with at least 6 reads in every animal, but only 490 variants are left. Low depth costs.
+EOF
+printf '%s\n' "$N"; set -x
+
 
 { set +x; } 2>/dev/null
 printf '\n%s=====================================================================%s\n' "$B" "$N"
@@ -682,6 +840,33 @@ awk '{b=($6>=0.5)?9:int($6/0.05); n[b]++} END {for(i=0;i<=9;i++) {s=sprintf("%*s
 awk '$6<0.01' results/wgs/vcf132/sites.tsv | wc -l
 awk '$6<0.05' results/wgs/vcf132/sites.tsv | wc -l
 
+MPLBACKEND=Agg python - <<'PY'
+import os
+import numpy as np
+import matplotlib.pyplot as plt
+os.makedirs("results/wgs/figures", exist_ok=True)
+rows = [l.rstrip("\n").split("\t") for l in open("results/wgs/vcf132/sites.tsv")]
+af = np.array([float(r[4]) for r in rows]); maf = np.array([float(r[5]) for r in rows])
+fig, ax = plt.subplots(1, 2, figsize=(11, 3.8))
+ax[0].hist(maf, bins=np.arange(0, 0.5001, 0.025), color="tab:blue", edgecolor="white")
+ax[0].axvline(0.01, color="tab:red", ls="--", lw=1); ax[0].axvline(0.05, color="tab:orange", ls="--", lw=1)
+ax[0].set(title="Minor allele frequency (MAF)", xlabel="MAF (red 1 %, orange 5 %)", ylabel="variants")
+ax[1].hist(af, bins=np.arange(0, 1.0001, 0.05), color="tab:purple", edgecolor="white")
+ax[1].set(title="Frequency of the ALT allele", xlabel="ALT allele frequency", ylabel="variants")
+plt.tight_layout()
+plt.savefig("results/wgs/figures/C1_allele_frequency.png", dpi=120, bbox_inches="tight")
+PY
+
+{ set +x; } 2>/dev/null
+printf '\n%s=====================================================================%s\n' "$B" "$N"
+printf '%s' "$C"; cat <<'EOF'
+Figure: allele-frequency spectrum.
+Left: MAF (the frequency of the rarer allele). Most variants are rare and fewer are common, as expected in real data. The dashed lines are the 1 % and 5 % thresholds.
+Right: the frequency of the ALT allele. It is skewed towards low values: the reference genome carries the common allele at most positions.
+EOF
+printf '%s\n' "$N"; set -x
+
+
 { set +x; } 2>/dev/null
 printf '\n%s=====================================================================%s\n' "$B" "$N"
 printf '%s' "$C"; cat <<'EOF'
@@ -700,6 +885,37 @@ printf '%s\n' "$N"; set -x
 
 awk '$7<0.001' results/wgs/vcf132/sites.tsv | wc -l
 sort -g -k7,7 results/wgs/vcf132/sites.tsv | head -n 5 | cut -f1-4,6,7
+
+MPLBACKEND=Agg python - <<'PY'
+import os
+import numpy as np
+import matplotlib.pyplot as plt
+os.makedirs("results/wgs/figures", exist_ok=True)
+rows = [l.rstrip("\n").split("\t") for l in open("results/wgs/vcf132/sites.tsv")]
+p = np.sort(np.array([float(r[6]) for r in rows]))
+n = len(p)
+obs = -np.log10(np.clip(p, 1e-300, 1))
+exp = -np.log10((np.arange(1, n + 1) - 0.5) / n)
+fig, ax = plt.subplots(1, 2, figsize=(11, 4))
+ax[0].plot([0, exp.max()], [0, exp.max()], c="grey", lw=1)
+ax[0].plot(exp[::-1], obs[::-1], ".", ms=3, color="tab:blue")
+ax[0].axhline(3, color="tab:red", ls="--", lw=1)
+ax[0].set(title="Hardy-Weinberg: observed against expected -log10(p)", xlabel="expected -log10(p)", ylabel="observed -log10(p)")
+ax[1].hist(p, bins=20, color="tab:blue", edgecolor="white")
+ax[1].set(title="Hardy-Weinberg p-values", xlabel="p-value", ylabel="variants")
+plt.tight_layout()
+plt.savefig("results/wgs/figures/C2_hardy_weinberg.png", dpi=120, bbox_inches="tight")
+PY
+
+{ set +x; } 2>/dev/null
+printf '\n%s=====================================================================%s\n' "$B" "$N"
+printf '%s' "$C"; cat <<'EOF'
+Figure: Hardy-Weinberg.
+Left: a QQ plot. If nothing is wrong the points follow the grey diagonal; here they stay on or below it and stop at about 3 (p about 0.0007): no variant is more extreme than that. A real data set would shoot far above the diagonal; here the authors have already removed the variants that broke Hardy-Weinberg.
+Right: the p-values are spread evenly; the tall bar at 1 are rare variants, which always agree with Hardy-Weinberg.
+EOF
+printf '%s\n' "$N"; set -x
+
 
 { set +x; } 2>/dev/null
 printf '\n%s=====================================================================%s\n' "$B" "$N"
@@ -722,6 +938,33 @@ sort -g -k5,5 results/wgs/vcf132/animals.tsv | head -n 5
 sort -g -k5,5 results/wgs/vcf132/animals.tsv | tail -n 3
 awk '{s+=$5; n++} END {printf "mean heterozygosity %.3f over %d animals\n", s/n, n}' results/wgs/vcf132/animals.tsv
 
+MPLBACKEND=Agg python - <<'PY'
+import os
+import numpy as np
+import matplotlib.pyplot as plt
+os.makedirs("results/wgs/figures", exist_ok=True)
+rows = [l.rstrip("\n").split("\t") for l in open("results/wgs/vcf132/animals.tsv")]
+rows.sort(key=lambda r: float(r[4]))
+het = np.array([float(r[4]) for r in rows])
+fig, ax = plt.subplots(figsize=(11, 3.8))
+ax.scatter(range(len(het)), het, s=26, color=np.where(het < 0.05, "tab:red", "tab:blue"))
+ax.axhline(het.mean(), color="grey", ls="--", lw=1)
+ax.text(1, het.mean() + 0.008, f"mean {het.mean():.3f}", fontsize=9, color="grey")
+ax.set(title="Heterozygosity of each animal over these 10 Mb (red: below 0.05)", xlabel="132 animals, sorted", ylabel="heterozygous / called genotypes", xticks=[])
+ax.set_ylim(-0.02, 0.42)
+plt.tight_layout()
+plt.savefig("results/wgs/figures/C3_heterozygosity_per_animal.png", dpi=120, bbox_inches="tight")
+PY
+
+{ set +x; } 2>/dev/null
+printf '\n%s=====================================================================%s\n' "$B" "$N"
+printf '%s' "$C"; cat <<'EOF'
+Figure: heterozygosity of every animal.
+Each dot is one animal. Most are between 0.07 and 0.38 (mean 0.288). Five animals (red) are below 0.05 and three of them are exactly 0: no heterozygous genotype in 10 Mb. Long runs of homozygosity (inbreeding) or a sample problem: worth a look in a real project.
+EOF
+printf '%s\n' "$N"; set -x
+
+
 { set +x; } 2>/dev/null
 printf '\n%s=====================================================================%s\n' "$B" "$N"
 printf '%s' "$C"; cat <<'EOF'
@@ -735,6 +978,62 @@ printf '%s\n' "$N"; set -x
 bcftools gtcheck data/session3/damona132_chr14_0-10Mb.vcf.gz 2>/dev/null > results/wgs/vcf132/gtcheck.txt
 grep -c '^DCv2' results/wgs/vcf132/gtcheck.txt
 grep '^DCv2' results/wgs/vcf132/gtcheck.txt | sort -g -k4,4 | head -n 5 | cut -f2-7
+
+bcftools query -l results/wgs/vcf132/tagged.vcf.gz > results/wgs/vcf132/samples.txt
+bcftools view -i 'MAF>=0.05' results/wgs/vcf132/tagged.vcf.gz -Ou | bcftools query -f '[%GT\t]\n' | awk 'NR%4==0' > results/wgs/vcf132/gt_matrix.tsv
+wc -l results/wgs/vcf132/samples.txt results/wgs/vcf132/gt_matrix.tsv
+
+MPLBACKEND=Agg python - <<'PY'
+import os
+import numpy as np
+import matplotlib.pyplot as plt
+os.makedirs("results/wgs/figures", exist_ok=True)
+# --- 1. how different are two animals? (every pair of the 132 animals, from bcftools gtcheck)
+pairs = [l.rstrip("\n").split("\t") for l in open("results/wgs/vcf132/gtcheck.txt") if l.startswith("DCv2")]
+diff = np.array([100 * (1 - float(r[6]) / float(r[5])) for r in pairs])
+
+# --- 2. PCA of the genotypes: every animal becomes one point; similar animals lie close together
+names = [l.strip() for l in open("results/wgs/vcf132/samples.txt")]
+code = {"0/0": 0, "0|0": 0, "0/1": 1, "1/0": 1, "0|1": 1, "1|0": 1, "1/1": 2, "1|1": 2}
+G = np.array([[code.get(x, np.nan) for x in line.rstrip("\n").split("\t")[:len(names)]] for line in open("results/wgs/vcf132/gt_matrix.tsv")], float)
+m = np.nanmean(G, axis=1, keepdims=True)
+G = np.where(np.isnan(G), m, G) - m
+sd = G.std(axis=1, keepdims=True)
+G = G / np.where(sd == 0, 1, sd)
+U, S, Vt = np.linalg.svd(G, full_matrices=False)
+pc = Vt.T * S
+var = 100 * S ** 2 / (S ** 2).sum()
+
+het = {r[0]: float(r[4]) for r in (l.rstrip("\n").split("\t") for l in open("results/wgs/vcf132/animals.tsv"))}
+trio = {"Damona-GIGA-ULiege-18": "calf", "Damona-GIGA-ULiege-14": "parent", "Damona-GIGA-ULiege-17": "parent"}
+fig, ax = plt.subplots(1, 3, figsize=(15, 4.3), gridspec_kw={"width_ratios": [1, 1.5, 0.8]})
+ax[0].hist(diff, bins=60, color="tab:grey")
+ax[0].set(title="Pairs of animals", xlabel="% of sites with different genotypes", ylabel="pairs of animals")
+low = np.array([het[n] < 0.05 for n in names])
+ax[1].scatter(pc[:, 0], pc[:, 1], s=22, color="tab:blue", alpha=0.7, label="animals")
+ax[1].scatter(pc[low, 0], pc[low, 1], s=40, color="tab:red", label="almost completely homozygous")
+for i, n in enumerate(names):
+    if n in trio:
+        ax[1].scatter(pc[i, 0], pc[i, 1], s=90, facecolors="none", edgecolors="black", linewidths=1.6)
+        ax[1].annotate(trio[n] + " " + n.split("-")[-1], (pc[i, 0], pc[i, 1]), textcoords="offset points", xytext=(6, 6), fontsize=8)
+ax[1].set(title="PCA of the 132 animals", xlabel=f"PC1 ({var[0]:.1f} %)", ylabel=f"PC2 ({var[1]:.1f} %)")
+ax[1].legend(fontsize=8)
+ax[2].bar(range(1, 11), var[:10], color="tab:blue")
+ax[2].set(title="Variance explained", xlabel="principal component", ylabel="%", xticks=range(1, 11))
+plt.tight_layout()
+plt.savefig("results/wgs/figures/C4_pairs_and_pca.png", dpi=120, bbox_inches="tight")
+PY
+
+{ set +x; } 2>/dev/null
+printf '\n%s=====================================================================%s\n' "$B" "$N"
+printf '%s' "$C"; cat <<'EOF'
+Figure: how similar are the animals?
+Left: every pair of animals, as the share of sites where they differ. Most pairs differ at 30-50 % of the sites. The small group at the far left are pairs that differ at less than 10 %: nearly identical animals (duplicates, clones, or animals homozygous for the same haplotype).
+Middle: a PCA, which puts every animal on a map: animals with similar genotypes lie close together. The nearly homozygous animals (red) are outliers; the calf and its two parents (circled) are among the other animals.
+Right: how much of the variation each principal component explains.
+EOF
+printf '%s\n' "$N"; set -x
+
 
 { set +x; } 2>/dev/null
 printf '\n%s=====================================================================%s\n' "$B" "$N"
@@ -756,7 +1055,7 @@ printf '%s\n' "$N"; set -x
 { echo ">chr14"; head -c 403034 /dev/zero | tr '\0' N; samtools faidx data/ref/mini.fa DGAT1_region | grep -v '>' | tr -d '\n'; echo; } | fold -w 60 > results/wgs/vcf132/chr14_window.fa
 samtools faidx results/wgs/vcf132/chr14_window.fa
 bcftools view -H -r chr14:403035-812781 data/session3/damona132_chr14_0-10Mb.vcf.gz | wc -l
-bcftools norm -c w -f results/wgs/vcf132/chr14_window.fa -r chr14:403035-812781 data/session3/damona132_chr14_0-10Mb.vcf.gz -Ou -o /dev/null 2>&1 | grep -c REF_MISMATCH || true
+bcftools norm -c w -f results/wgs/vcf132/chr14_window.fa -r chr14:403035-812781 data/session3/damona132_chr14_0-10Mb.vcf.gz -Ou -o /dev/null 2>&1 | grep -c REF_MISMATCH | tee results/wgs/vcf132/mismatch_right.txt || true
 
 { set +x; } 2>/dev/null
 printf '\n%s=====================================================================%s\n' "$B" "$N"
@@ -767,7 +1066,33 @@ printf '%s\n' "$N"; set -x
 
 { echo ">chr14"; head -c 403035 /dev/zero | tr '\0' N; samtools faidx data/ref/mini.fa DGAT1_region | grep -v '>' | tr -d '\n'; echo; } | fold -w 60 > results/wgs/vcf132/chr14_window_shifted.fa
 samtools faidx results/wgs/vcf132/chr14_window_shifted.fa
-bcftools norm -c w -f results/wgs/vcf132/chr14_window_shifted.fa -r chr14:403035-812781 data/session3/damona132_chr14_0-10Mb.vcf.gz -Ou -o /dev/null 2>&1 | grep -c REF_MISMATCH || true
+bcftools norm -c w -f results/wgs/vcf132/chr14_window_shifted.fa -r chr14:403035-812781 data/session3/damona132_chr14_0-10Mb.vcf.gz -Ou -o /dev/null 2>&1 | grep -c REF_MISMATCH | tee results/wgs/vcf132/mismatch_shifted.txt || true
+
+MPLBACKEND=Agg python - <<'PY'
+import os
+import numpy as np
+import matplotlib.pyplot as plt
+os.makedirs("results/wgs/figures", exist_ok=True)
+right = int(open("results/wgs/vcf132/mismatch_right.txt").read())
+shifted = int(open("results/wgs/vcf132/mismatch_shifted.txt").read())
+fig, ax = plt.subplots(figsize=(6, 3.8))
+bars = ax.bar(["right genome\n(ARS-UCD2.0)", "genome shifted\nby one base"], [right, shifted], color=["tab:green", "tab:red"])
+for b, v in zip(bars, [right, shifted]):
+    ax.text(b.get_x() + b.get_width() / 2, v, f"{v} of 491", ha="center", va="bottom")
+ax.set(title="REF alleles that disagree with the genome", ylabel="variants")
+ax.set_ylim(0, 491)
+plt.tight_layout()
+plt.savefig("results/wgs/figures/C5_genome_build_check.png", dpi=120, bbox_inches="tight")
+PY
+
+{ set +x; } 2>/dev/null
+printf '\n%s=====================================================================%s\n' "$B" "$N"
+printf '%s' "$C"; cat <<'EOF'
+Figure: the genome-build check.
+With the right genome no REF allele disagrees (0 of 491). Shift the genome by one base and about three in four disagree (377 of 491). One wrong base is enough to see it.
+EOF
+printf '%s\n' "$N"; set -x
+
 
 { set +x; } 2>/dev/null
 printf '\n%s=====================================================================%s\n' "$B" "$N"
@@ -838,6 +1163,39 @@ EOF
 printf '%s\n' "$N"; set -x
 
 bcftools query -f '%POS\n' data/session3/damona132_chr14_0-10Mb.vcf.gz | awk '{n[int($1/1000000)]++} END {for(i=0;i<10;i++) {s=sprintf("%*s", n[i]/150, ""); gsub(/ /,"#",s); printf "%2d-%2d Mb %5d %s\n", i, i+1, n[i], s}}'
+
+MPLBACKEND=Agg python - <<'PY'
+import os
+import numpy as np
+import matplotlib.pyplot as plt
+os.makedirs("results/wgs/figures", exist_ok=True)
+rows = [l.rstrip("\n").split("\t") for l in open("results/wgs/vcf132/sites.tsv")]
+pos = np.array([int(r[1]) for r in rows]) / 1e6
+maf = np.array([float(r[5]) for r in rows])
+edges = np.arange(0, 10.0001, 0.1)
+idx = np.clip(np.digitize(pos, edges) - 1, 0, len(edges) - 2)
+count = np.bincount(idx, minlength=len(edges) - 1)
+mean_maf = np.array([maf[idx == i].mean() if (idx == i).any() else np.nan for i in range(len(edges) - 1)])
+fig, ax = plt.subplots(2, 1, figsize=(11, 5.5), sharex=True)
+ax[0].bar(edges[:-1], count, width=0.1, align="edge", color="tab:blue")
+ax[0].set(ylabel="variants per 100 kb", title="Variant density and diversity along chromosome 14 (first 10 Mb)")
+ax[1].plot(edges[:-1] + 0.05, mean_maf, color="tab:purple")
+ax[1].set(ylabel="mean MAF per 100 kb", xlabel="position on chromosome 14 (Mb)")
+for a in ax:
+    a.axvspan(0.603, 0.613, color="tab:orange", alpha=0.5)
+ax[0].text(0.62, count.max() * 0.9, "DGAT1", color="tab:orange", fontsize=9)
+plt.tight_layout()
+plt.savefig("results/wgs/figures/C6_density_along_chr14.png", dpi=120, bbox_inches="tight")
+PY
+
+{ set +x; } 2>/dev/null
+printf '\n%s=====================================================================%s\n' "$B" "$N"
+printf '%s' "$C"; cat <<'EOF'
+Figure: variants along the region.
+Top: the number of variants per 100 kb; there are most between 4 and 5 Mb and few at the start. Bottom: the mean MAF per 100 kb, a simple measure of diversity. The orange line is the DGAT1 gene (about 0.6 Mb), the gene of Parts A-B.
+EOF
+printf '%s\n' "$N"; set -x
+
 
 { set +x; } 2>/dev/null
 printf '\n%s=====================================================================%s\n' "$B" "$N"

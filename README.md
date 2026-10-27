@@ -9,6 +9,8 @@ FastQC, fastp, BWA-MEM and bcftools to a quality-checked VCF. Every step is a pl
 | **B** | Reads to a checked VCF: FastQC, fastp, BWA-MEM, bcftools call, filter, Mendel check |
 | **C** | QA/QC of a **complete VCF of 132 Holstein**: Ts/Tv, QC tags, missingness, MAF, Hardy-Weinberg, odd animals, genome build, filter, everyday commands |
 
+**Figures:** the notebook draws 10 figures (read quality, coverage and insert size, call quality, filter trade-off, allele frequencies, Hardy-Weinberg, heterozygosity per animal, pairs of animals and PCA, genome-build check, variant density). They are short Python cells that plot the tables made by the shell commands; the script saves the same figures as PNG files in `results/wgs/figures/`.
+
 ## Run it in Google Colab (nothing to install)
 
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/pratikpathade/GenART-Day1-WGS/blob/main/Day1_WGS_VCF_shell_tutorial.ipynb)
