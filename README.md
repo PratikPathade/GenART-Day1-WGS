@@ -3,12 +3,18 @@
 Hands-on tutorial for the GenART workshop (TANUVAS, Chennai): real whole-genome reads of a Holstein calf and its two parents go through
 FastQC, fastp, BWA-MEM and bcftools to a quality-checked VCF. Every step is a plain shell command; each command is printed and its full output is shown.
 
+| Part | What |
+|---|---|
+| **A** | Look at the files: FASTQ reads, FASTA reference, a VCF |
+| **B** | Reads to a checked VCF: FastQC, fastp, BWA-MEM, bcftools call, filter, Mendel check |
+| **C** | QA/QC of a **complete VCF of 132 Holstein**: Ts/Tv, QC tags, missingness, MAF, Hardy-Weinberg, odd animals, genome build, filter, everyday commands |
+
 ## Run it in Google Colab (nothing to install)
 
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/pratikpathade/GenART-Day1-WGS/blob/main/Day1_WGS_VCF_shell_tutorial.ipynb)
 
 1. Click the badge, then **Connect** (top right).
-2. Run the cells from top to bottom (play button, or *Runtime > Run all*). Setup takes about 3-4 minutes, the analysis about 1 minute.
+2. Run the cells from top to bottom (play button, or *Runtime > Run all*). Setup takes about 3-4 minutes, Parts A-B about 1 minute, Part C under 1 minute. (Part C needs only the setup cells, not A and B.)
 
 ## Run it as a script (Linux / Colab terminal)
 

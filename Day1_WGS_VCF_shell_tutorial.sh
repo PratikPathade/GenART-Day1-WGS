@@ -545,3 +545,323 @@ printf '%s' "$C"; cat <<'EOF'
 The whole pipeline: FASTQ --FastQC--> --fastp--> --FastQC--> --BWA-MEM--> BAM --bcftools--> VCF --filter--> --checks--> a VCF we can use.
 EOF
 printf '%s\n' "$N"; set -x
+
+{ set +x; } 2>/dev/null
+printf '\n%s=====================================================================%s\n' "$B" "$N"
+printf '%s' "$C"; cat <<'EOF'
+PART C - QA/QC of a complete VCF (132 Holstein, whole-genome sequence)
+
+Part B made a VCF from three animals. Here we take a finished, complete VCF and do what you do with every VCF you receive: audit it before using it.
+The file data/session3/damona132_chr14_0-10Mb.vcf.gz holds the genotypes of 132 Holstein (whole-genome sequence, chromosome 14, first 10 Mb, 41,151 SNPs); the calf and parents of Part B are among them.
+Source: Druet T, Forneris NS (2026), Zenodo doi:10.5281/zenodo.23011638 (CC BY 4.0). The authors had already filtered and refined it, so this QC is an audit:
+check what the authors say they did, and check what the file does not tell you.
+
+| Step | Question |
+|---|---|
+| C1 | What is in the file? (header, animals, variants) |
+| C2 | What kind of variants, and how many? (Ts/Tv) |
+| C3 | Add QC tags to every variant (allele frequency, MAF, Hardy-Weinberg, missingness) |
+| C4 | How complete is it? (missing genotypes) |
+| C5 | Allele-frequency spectrum (MAF) |
+| C6 | Hardy-Weinberg equilibrium |
+| C7 | Which animals look odd? (heterozygosity, duplicates) |
+| C8 | Is it on the right genome build? (REF alleles against the genome) |
+| C9 | Filter for analysis |
+| C10 | Everyday VCF commands (region, animals, genotypes, Mendel check, density) |
+| C11 | Final checks (PASS / FAIL) |
+
+Part C only needs the setup cells (0a-0d), not Parts A and B.
+EOF
+printf '%s\n' "$N"; set -x
+
+{ set +x; } 2>/dev/null
+printf '\n%s=====================================================================%s\n' "$B" "$N"
+printf '%s' "$C"; cat <<'EOF'
+Start: a folder for the results of Part C.
+EOF
+printf '%s\n' "$N"; set -x
+
+mkdir -p results/wgs/vcf132
+ls -lh data/session3/damona132_chr14_0-10Mb.vcf.gz data/session3/damona132_chr14_0-10Mb.vcf.gz.tbi
+
+{ set +x; } 2>/dev/null
+printf '\n%s=====================================================================%s\n' "$B" "$N"
+printf '%s' "$C"; cat <<'EOF'
+C1: What is in the file?
+A VCF has a header (## lines), one #CHROM line with the column names, then one line per variant with one column per animal.
+QUAL and FILTER are . here because depth and quality were used up-stream and are not kept in this file; INFO holds AC (alternative alleles counted) and AN (alleles with a genotype).
+Genotype GT: 0/0 two reference alleles, 0/1 heterozygous, 1/1 two alternative alleles, ./. missing. | instead of / means the genotype is phased.
+EOF
+printf '%s\n' "$N"; set -x
+
+bcftools head data/session3/damona132_chr14_0-10Mb.vcf.gz | grep -v '^##contig' | cut -c1-110
+bcftools view -H data/session3/damona132_chr14_0-10Mb.vcf.gz | head -n 3 | cut -f1-12
+bcftools query -l data/session3/damona132_chr14_0-10Mb.vcf.gz | head -n 3
+bcftools query -l data/session3/damona132_chr14_0-10Mb.vcf.gz | wc -l
+bcftools index -s data/session3/damona132_chr14_0-10Mb.vcf.gz
+
+{ set +x; } 2>/dev/null
+printf '\n%s=====================================================================%s\n' "$B" "$N"
+printf '%s' "$C"; cat <<'EOF'
+bcftools index -s shows the contigs of the index and the number of variants on each: one contig (chr14) with 41,151 variants.
+EOF
+printf '%s\n' "$N"; set -x
+
+{ set +x; } 2>/dev/null
+printf '\n%s=====================================================================%s\n' "$B" "$N"
+printf '%s' "$C"; cat <<'EOF'
+C2: What kind of variants, and how many?
+bcftools stats counts everything: records, SNPs, indels, multiallelic sites, and the transition/transversion ratio.
+Ts/Tv: transitions (A<->G, C<->T) are about twice as common as transversions in real cattle SNPs (about 2.0-2.5 genome-wide); random errors give about 0.5. A low Ts/Tv warns of false positives.
+EOF
+printf '%s\n' "$N"; set -x
+
+bcftools stats data/session3/damona132_chr14_0-10Mb.vcf.gz > results/wgs/vcf132/stats.txt
+grep '^SN' results/wgs/vcf132/stats.txt | cut -f3-
+grep '^TSTV' results/wgs/vcf132/stats.txt | cut -f3-5
+
+{ set +x; } 2>/dev/null
+printf '\n%s=====================================================================%s\n' "$B" "$N"
+printf '%s' "$C"; cat <<'EOF'
+All 41,151 records are biallelic SNPs (no indels, no multiallelic sites), and Ts/Tv = 2.67: these look like real variants.
+EOF
+printf '%s\n' "$N"; set -x
+
+{ set +x; } 2>/dev/null
+printf '\n%s=====================================================================%s\n' "$B" "$N"
+printf '%s' "$C"; cat <<'EOF'
+C3: Add QC tags to every variant
+bcftools +fill-tags (a *plugin*) calculates new INFO fields from the genotypes: AF allele frequency, MAF minor allele frequency, HWE Hardy-Weinberg p-value,
+ExcHet excess-heterozygosity p-value, F_MISSING fraction of animals with a missing genotype. We write a new VCF, then one table with one line per variant.
+Columns: chromosome, position, REF, ALT, AF, MAF, HWE, F_MISSING.
+EOF
+printf '%s\n' "$N"; set -x
+
+bcftools +fill-tags data/session3/damona132_chr14_0-10Mb.vcf.gz -Oz -o results/wgs/vcf132/tagged.vcf.gz -- -t AF,MAF,HWE,ExcHet,F_MISSING
+bcftools index -t -f results/wgs/vcf132/tagged.vcf.gz
+bcftools query -f '%CHROM\t%POS\t%REF\t%ALT\t%INFO/AF\t%INFO/MAF\t%INFO/HWE\t%INFO/F_MISSING\n' results/wgs/vcf132/tagged.vcf.gz > results/wgs/vcf132/sites.tsv
+head -n 5 results/wgs/vcf132/sites.tsv
+wc -l results/wgs/vcf132/sites.tsv
+
+{ set +x; } 2>/dev/null
+printf '\n%s=====================================================================%s\n' "$B" "$N"
+printf '%s' "$C"; cat <<'EOF'
+From here on we simply read the table sites.tsv with awk and sort: one line per variant.
+EOF
+printf '%s\n' "$N"; set -x
+
+{ set +x; } 2>/dev/null
+printf '\n%s=====================================================================%s\n' "$B" "$N"
+printf '%s' "$C"; cat <<'EOF'
+C4: How complete is it?
+Missing genotypes (./.) per variant (column 8 of the table) and per animal (nMissing in the per-sample statistics of bcftools stats -s -).
+EOF
+printf '%s\n' "$N"; set -x
+
+awk '$8>0' results/wgs/vcf132/sites.tsv | wc -l
+bcftools stats -s - data/session3/damona132_chr14_0-10Mb.vcf.gz | grep '^PSC' | awk '{m+=$14} END {print m, "missing genotype calls in total"}'
+bcftools stats -s - data/session3/damona132_chr14_0-10Mb.vcf.gz | grep '^PSC' | awk '$14>0 {print $3, $14}' | sort -k2,2nr | head -n 5
+
+{ set +x; } 2>/dev/null
+printf '\n%s=====================================================================%s\n' "$B" "$N"
+printf '%s' "$C"; cat <<'EOF'
+Only 104 of 41,151 variants have a missing genotype and 141 calls are missing out of 5.4 million (132 animals x 41,151 variants): the file is almost complete, because the authors imputed and refined it (Beagle).
+EOF
+printf '%s\n' "$N"; set -x
+
+{ set +x; } 2>/dev/null
+printf '\n%s=====================================================================%s\n' "$B" "$N"
+printf '%s' "$C"; cat <<'EOF'
+C5: Allele-frequency spectrum (MAF)
+How many variants are rare, how many common? A text histogram, one # per 400 variants. Real data: many rare variants and fewer common ones.
+Then the number of variants with MAF below 1 % and below 5 %.
+EOF
+printf '%s\n' "$N"; set -x
+
+awk '{b=($6>=0.5)?9:int($6/0.05); n[b]++} END {for(i=0;i<=9;i++) {s=sprintf("%*s", n[i]/400, ""); gsub(/ /,"#",s); printf "MAF %.2f-%.2f %6d %s\n", i*0.05, (i+1)*0.05, n[i], s}}' results/wgs/vcf132/sites.tsv
+awk '$6<0.01' results/wgs/vcf132/sites.tsv | wc -l
+awk '$6<0.05' results/wgs/vcf132/sites.tsv | wc -l
+
+{ set +x; } 2>/dev/null
+printf '\n%s=====================================================================%s\n' "$B" "$N"
+printf '%s' "$C"; cat <<'EOF'
+The first bar is the highest: the commonest class are the rare variants (MAF below 5 %: 8,161 variants; below 1 %: 1,133). A flat spectrum would be suspicious.
+EOF
+printf '%s\n' "$N"; set -x
+
+{ set +x; } 2>/dev/null
+printf '\n%s=====================================================================%s\n' "$B" "$N"
+printf '%s' "$C"; cat <<'EOF'
+C6: Hardy-Weinberg equilibrium
+In a randomly mating population the genotype counts follow the allele frequency (p^2, 2pq, q^2). A variant that clearly breaks this often is a genotyping or calling error.
+With 41,151 tests, about 41 variants would have p < 0.001 by chance alone. We count the variants below 0.001 and list the five smallest p-values (columns: chromosome, position, REF, ALT, MAF, HWE p).
+EOF
+printf '%s\n' "$N"; set -x
+
+awk '$7<0.001' results/wgs/vcf132/sites.tsv | wc -l
+sort -g -k7,7 results/wgs/vcf132/sites.tsv | head -n 5 | cut -f1-4,6,7
+
+{ set +x; } 2>/dev/null
+printf '\n%s=====================================================================%s\n' "$B" "$N"
+printf '%s' "$C"; cat <<'EOF'
+Only 4 variants, and none below 0.0005, instead of about 40: a Hardy-Weinberg filter has been applied, exactly as the authors say. In raw sequence data you would see many more.
+EOF
+printf '%s\n' "$N"; set -x
+
+{ set +x; } 2>/dev/null
+printf '\n%s=====================================================================%s\n' "$B" "$N"
+printf '%s' "$C"; cat <<'EOF'
+C7: Which animals look odd?
+Per animal, from bcftools stats -s - (PSC lines): columns are animal, homozygous reference, homozygous alternative, heterozygous, and the heterozygosity (heterozygous / all called).
+Very low heterozygosity over 10 Mb = long runs of homozygosity (inbreeding, or a sample problem); very high = possible contamination.
+EOF
+printf '%s\n' "$N"; set -x
+
+bcftools stats -s - data/session3/damona132_chr14_0-10Mb.vcf.gz | grep '^PSC' | awk '{printf "%s\t%d\t%d\t%d\t%.3f\n", $3, $4, $5, $6, $6/($4+$5+$6)}' > results/wgs/vcf132/animals.tsv
+sort -g -k5,5 results/wgs/vcf132/animals.tsv | head -n 5
+sort -g -k5,5 results/wgs/vcf132/animals.tsv | tail -n 3
+awk '{s+=$5; n++} END {printf "mean heterozygosity %.3f over %d animals\n", s/n, n}' results/wgs/vcf132/animals.tsv
+
+{ set +x; } 2>/dev/null
+printf '\n%s=====================================================================%s\n' "$B" "$N"
+printf '%s' "$C"; cat <<'EOF'
+The mean heterozygosity is 0.288 and the highest 0.38, but three animals are almost completely homozygous (heterozygosity 0.000) over the whole 10 Mb, and two more have only about 0.02: long runs of homozygosity (inbreeding) or a sample problem, worth a look in a real project.
+
+Are any two animals the same? bcftools gtcheck compares every animal with every other animal. Columns: animal 1, animal 2, discordance (0 = identical), average -log P(HWE) of the matching sites, sites compared, matching genotypes.
+Identical genotypes at thousands of sites would mean a duplicated sample or a clone, but if the matches are mostly common genotypes (a low value in column 4) the animals may just be homozygous for the same common haplotype - so read both columns.
+EOF
+printf '%s\n' "$N"; set -x
+
+bcftools gtcheck data/session3/damona132_chr14_0-10Mb.vcf.gz 2>/dev/null > results/wgs/vcf132/gtcheck.txt
+grep -c '^DCv2' results/wgs/vcf132/gtcheck.txt
+grep '^DCv2' results/wgs/vcf132/gtcheck.txt | sort -g -k4,4 | head -n 5 | cut -f2-7
+
+{ set +x; } 2>/dev/null
+printf '\n%s=====================================================================%s\n' "$B" "$N"
+printf '%s' "$C"; cat <<'EOF'
+There are 8,646 pairs (132 x 131 / 2). The best-matching pairs differ at only 0-2 of about 41,150 sites, yet their column 4 is low (0.5-0.9): most of their matches are common genotypes, not rare ones. One of these pairs, animals 6 and 240, consists of two of the three nearly homozygous animals above. A good example of why one number is not enough.
+EOF
+printf '%s\n' "$N"; set -x
+
+{ set +x; } 2>/dev/null
+printf '\n%s=====================================================================%s\n' "$B" "$N"
+printf '%s' "$C"; cat <<'EOF'
+C8: Is it on the right genome build?
+Positions only mean something on the genome build they were made on. A VCF on the wrong build looks perfectly fine and gives wrong results. The test: do the REF alleles of the VCF agree with the genome at those positions?
+
+Our reference data/ref/mini.fa holds 410 kb of chromosome 14 (ARS-UCD2.0, around the DGAT1 gene). We put it back at its real position (it starts at chr14:403,035) by padding it with N, then ask bcftools norm -c w to warn (REF_MISMATCH) wherever a REF allele disagrees with the genome.
+EOF
+printf '%s\n' "$N"; set -x
+
+{ echo ">chr14"; head -c 403034 /dev/zero | tr '\0' N; samtools faidx data/ref/mini.fa DGAT1_region | grep -v '>' | tr -d '\n'; echo; } | fold -w 60 > results/wgs/vcf132/chr14_window.fa
+samtools faidx results/wgs/vcf132/chr14_window.fa
+bcftools view -H -r chr14:403035-812781 data/session3/damona132_chr14_0-10Mb.vcf.gz | wc -l
+bcftools norm -c w -f results/wgs/vcf132/chr14_window.fa -r chr14:403035-812781 data/session3/damona132_chr14_0-10Mb.vcf.gz -Ou -o /dev/null 2>&1 | grep -c REF_MISMATCH || true
+
+{ set +x; } 2>/dev/null
+printf '\n%s=====================================================================%s\n' "$B" "$N"
+printf '%s' "$C"; cat <<'EOF'
+491 variants lie in the window and 0 REF alleles disagree: the file is on ARS-UCD2.0. Now the control: the same genome moved by one base (a stand-in for the wrong assembly):
+EOF
+printf '%s\n' "$N"; set -x
+
+{ echo ">chr14"; head -c 403035 /dev/zero | tr '\0' N; samtools faidx data/ref/mini.fa DGAT1_region | grep -v '>' | tr -d '\n'; echo; } | fold -w 60 > results/wgs/vcf132/chr14_window_shifted.fa
+samtools faidx results/wgs/vcf132/chr14_window_shifted.fa
+bcftools norm -c w -f results/wgs/vcf132/chr14_window_shifted.fa -r chr14:403035-812781 data/session3/damona132_chr14_0-10Mb.vcf.gz -Ou -o /dev/null 2>&1 | grep -c REF_MISMATCH || true
+
+{ set +x; } 2>/dev/null
+printf '\n%s=====================================================================%s\n' "$B" "$N"
+printf '%s' "$C"; cat <<'EOF'
+377 of 491 (about three in four) disagree: that is what a wrong build looks like. Do not trust the header alone. This header lists chr14 with length=82253933, but ARS-UCD2.0 chr14 is 82,403,003 bp; the alleles are the real test.
+EOF
+printf '%s\n' "$N"; set -x
+
+bcftools head data/session3/damona132_chr14_0-10Mb.vcf.gz | grep -E 'ID=(chr)?14[,>]'
+
+{ set +x; } 2>/dev/null
+printf '\n%s=====================================================================%s\n' "$B" "$N"
+printf '%s' "$C"; cat <<'EOF'
+C9: Filter for analysis
+Keep variants with minor allele frequency >= 1 % (rare variants carry little information and are often errors) and fewer than 5 % missing calls. We use the tags from C3 (MAF, F_MISSING) and check the result.
+EOF
+printf '%s\n' "$N"; set -x
+
+bcftools view -i 'MAF>=0.01 && F_MISSING<0.05' -Oz -o results/wgs/vcf132/qc.vcf.gz results/wgs/vcf132/tagged.vcf.gz
+bcftools index -t -f results/wgs/vcf132/qc.vcf.gz
+bcftools view -H results/wgs/vcf132/tagged.vcf.gz | wc -l
+bcftools view -H results/wgs/vcf132/qc.vcf.gz | wc -l
+
+{ set +x; } 2>/dev/null
+printf '\n%s=====================================================================%s\n' "$B" "$N"
+printf '%s' "$C"; cat <<'EOF'
+41,151 variants before, 40,018 after: exactly the 1,133 variants with MAF below 1 % are removed (no variant has more than 5 % missing calls). This qc.vcf.gz is the file you hand over to the analysis (GWAS, relatedness, PCA ...).
+EOF
+printf '%s\n' "$N"; set -x
+
+{ set +x; } 2>/dev/null
+printf '\n%s=====================================================================%s\n' "$B" "$N"
+printf '%s' "$C"; cat <<'EOF'
+C10: Everyday VCF commands
+One region. -r uses the index to jump straight to a region: how many variants in 100 kb?
+Some animals. -s keeps only the animals you name: here the calf and its two parents of Parts A-B (their names in this VCF are in data/reads/animals.tsv).
+Genotypes as a table with bcftools query: one line per variant, one column per animal.
+EOF
+printf '%s\n' "$N"; set -x
+
+bcftools view -H -r chr14:5000000-5100000 results/wgs/vcf132/qc.vcf.gz | wc -l
+bcftools view -s Damona-GIGA-ULiege-18,Damona-GIGA-ULiege-14,Damona-GIGA-ULiege-17 results/wgs/vcf132/qc.vcf.gz -Oz -o results/wgs/vcf132/trio.vcf.gz
+bcftools query -l results/wgs/vcf132/trio.vcf.gz
+bcftools query -f '%CHROM\t%POS\t%REF\t%ALT[\t%GT]\n' results/wgs/vcf132/trio.vcf.gz | head -n 5
+
+{ set +x; } 2>/dev/null
+printf '\n%s=====================================================================%s\n' "$B" "$N"
+printf '%s' "$C"; cat <<'EOF'
+Genotype counts of the three animals over all variants, and the family check from Part B, now on the published genotypes: the calf (first) must follow Mendel's rules with the other two as parents.
+EOF
+printf '%s\n' "$N"; set -x
+
+bcftools query -f '[%GT\n]' results/wgs/vcf132/trio.vcf.gz | sort | uniq -c
+bcftools +mendelian2 results/wgs/vcf132/trio.vcf.gz -p Damona-GIGA-ULiege-18,Damona-GIGA-ULiege-14,Damona-GIGA-ULiege-17 | grep -E '^(ngood|nmerr)'
+
+{ set +x; } 2>/dev/null
+printf '\n%s=====================================================================%s\n' "$B" "$N"
+printf '%s' "$C"; cat <<'EOF'
+0 Mendelian errors in 40,016 checked genotypes: the published genotypes are consistent. (Our own calls from Part B had 57 errors in 852 calls with the strict filter - the difference between 6x reads and a refined, imputed file.)
+EOF
+printf '%s\n' "$N"; set -x
+
+{ set +x; } 2>/dev/null
+printf '\n%s=====================================================================%s\n' "$B" "$N"
+printf '%s' "$C"; cat <<'EOF'
+Variant density along the region (one # per 150 variants): variants are not evenly spread; the most are found at 4-5 Mb. (The DGAT1 gene, the milk-fat gene of Parts A-B, lies at about 0.6 Mb, in the first, sparse bin.)
+EOF
+printf '%s\n' "$N"; set -x
+
+bcftools query -f '%POS\n' data/session3/damona132_chr14_0-10Mb.vcf.gz | awk '{n[int($1/1000000)]++} END {for(i=0;i<10;i++) {s=sprintf("%*s", n[i]/150, ""); gsub(/ /,"#",s); printf "%2d-%2d Mb %5d %s\n", i, i+1, n[i], s}}'
+
+{ set +x; } 2>/dev/null
+printf '\n%s=====================================================================%s\n' "$B" "$N"
+printf '%s' "$C"; cat <<'EOF'
+C11: Final checks
+The four checks of an audit, each PASS or FAIL: the right number of animals, only biallelic SNPs, REF alleles agree with the genome, Ts/Tv like real variants.
+EOF
+printf '%s\n' "$N"; set -x
+
+n_samp=$(bcftools query -l data/session3/damona132_chr14_0-10Mb.vcf.gz | wc -l)
+n_snp=$(grep '^SN' results/wgs/vcf132/stats.txt | grep 'number of SNPs' | cut -f4)
+n_site=$(grep '^SN' results/wgs/vcf132/stats.txt | grep 'number of records' | cut -f4)
+n_multi=$(grep '^SN' results/wgs/vcf132/stats.txt | grep 'multiallelic sites' | head -n 1 | cut -f4)
+mism=$(bcftools norm -c w -f results/wgs/vcf132/chr14_window.fa -r chr14:403035-812781 data/session3/damona132_chr14_0-10Mb.vcf.gz -Ou -o /dev/null 2>&1 | grep -c REF_MISMATCH || true)
+tstv=$(grep '^TSTV' results/wgs/vcf132/stats.txt | cut -f5)
+[ "$n_samp" = 132 ] && echo "PASS  132 animals in the file ($n_samp)" || echo "FAIL  animals: $n_samp"
+[ "$n_snp" = "$n_site" ] && [ "$n_multi" = 0 ] && echo "PASS  only biallelic SNPs ($n_snp SNPs of $n_site records)" || echo "FAIL  not only biallelic SNPs"
+[ "$mism" = 0 ] && echo "PASS  REF alleles agree with ARS-UCD2.0 ($mism mismatches)" || echo "FAIL  REF mismatches: $mism"
+awk -v t="$tstv" 'BEGIN { if (t>=2.0 && t<=3.0) print "PASS  Ts/Tv looks like real variants (" t ")"; else print "FAIL  Ts/Tv " t }'
+
+{ set +x; } 2>/dev/null
+printf '\n%s=====================================================================%s\n' "$B" "$N"
+printf '%s' "$C"; cat <<'EOF'
+The audit of a VCF, in short: how many animals and variants - what kind (Ts/Tv) - how complete - allele-frequency spectrum - Hardy-Weinberg - odd or identical animals - right genome build - filter - Mendel check when you have families.
+Then the VCF is ready for analysis. The files are in results/wgs/vcf132/: qc.vcf.gz (the filtered VCF), tagged.vcf.gz, sites.tsv, animals.tsv, gtcheck.txt, stats.txt.
+EOF
+printf '%s\n' "$N"; set -x
